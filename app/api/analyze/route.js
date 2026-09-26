@@ -45,6 +45,60 @@ export async function POST(request) {
       );
     }
 
+    const { data: matches, error: matchError } = await supabase.rpc(
+      "match_similar_check",
+      {
+        input_text: messageText,
+        threshold: 0.55,
+      }
+    );
+
+    if (matchError) {
+      console.error("Similarity match error:", matchError);
+    }
+
+    if (matches && matches.length > 0) {
+      const match = matches[0];
+
+      let summary = match.summary;
+
+      if (
+        (match.company_name && match.company_name !== companyName) ||
+        (match.sender_domain && match.sender_domain !== senderDomain)
+      ) {
+        summary += ` This message closely matches a job offer reported earlier${
+          match.company_name ? ` under the company name "${match.company_name}"` : ""
+        }${
+          match.sender_domain ? ` and sender domain "${match.sender_domain}"` : ""
+        }. Scammers often reuse the same message template with small changes.`;
+      }
+
+      const analysis = {
+        riskScore: match.risk_score,
+        riskLevel: match.risk_level,
+        flags: match.flags,
+        summary,
+        matchedPrevious: true,
+      };
+
+      const { error: dbError } = await supabase.from("checks").insert({
+        message_text: messageText,
+        company_name: companyName || null,
+        sender_domain: senderDomain || null,
+        risk_score: analysis.riskScore,
+        risk_level: analysis.riskLevel,
+        summary: analysis.summary,
+        flags: analysis.flags,
+        user_id: userId || null,
+      });
+
+      if (dbError) {
+        console.error("Supabase insert error:", dbError);
+      }
+
+      return Response.json(analysis);
+    }
+
     const prompt = `
 You are a job scam detection analyst focused on Nigeria and remote job offers.
 
