@@ -61,6 +61,8 @@ export default function Dashboard() {
           justifyContent: "space-between",
           alignItems: "center",
           marginBottom: 20,
+          flexWrap: "wrap",
+          gap: 10,
         }}
       >
         <h1>Your Check History</h1>
@@ -90,6 +92,8 @@ export default function Dashboard() {
                 display: "flex",
                 justifyContent: "space-between",
                 alignItems: "center",
+                flexWrap: "wrap",
+                gap: 10,
               }}
             >
               <div>
@@ -120,12 +124,11 @@ export default function Dashboard() {
               marginBottom: 20,
             }}
           >
-            ← Back to history
+            Back to history
           </button>
 
           <div className="result-header">
             <h2>Analysis Results</h2>
-
             <div className={`risk ${getRiskClass(selected.risk_level)}`}>
               {selected.risk_level?.toUpperCase()} RISK
             </div>
@@ -143,7 +146,6 @@ export default function Dashboard() {
 
           <div className="flags">
             <h3>Warning Signs</h3>
-
             {selected.flags?.map((flag, index) => (
               <div
                 className={`flag ${flag.detected ? "detected" : "safe"}`}
@@ -152,7 +154,7 @@ export default function Dashboard() {
                 <div className="flag-title">
                   <strong>{flag.category}</strong>
                   <span>
-                    {flag.detected ? "⚠️ Detected" : "✓ Not detected"}
+                    {flag.detected ? "Detected" : "Not detected"}
                   </span>
                 </div>
 
@@ -168,6 +170,7 @@ export default function Dashboard() {
           </div>
 
           <button
+            className="export-btn"
             onClick={() =>
               exportReportToPDF(
                 {
@@ -182,7 +185,6 @@ export default function Dashboard() {
                 }
               )
             }
-            style={{ marginTop: 20, background: "#172033" }}
           >
             Export Report (PDF)
           </button>

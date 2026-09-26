@@ -109,9 +109,7 @@ export async function POST(request) {
     if (API_KEYS.length === 0) {
       return Response.json(
         {
-          error: "No Gemini API keys configured.",
-          details:
-            "Make sure GEMINI_API_KEY exists in your .env.local file.",
+          error: "Service configuration error.",
         },
         { status: 500 }
       );
@@ -293,14 +291,9 @@ Return ONLY valid JSON using exactly this structure:
     );
 
     if (!response?.ok) {
-      const message =
-        data?.error?.message ||
-        "Unknown Gemini API error.";
-
       return Response.json(
         {
-          error: "Gemini API request failed.",
-          details: message,
+          error: "Request failed. Please try again.",
         },
         {
           status: response?.status || 500,
@@ -314,8 +307,7 @@ Return ONLY valid JSON using exactly this structure:
     if (!generatedText) {
       return Response.json(
         {
-          error: "Gemini returned an empty response.",
-          details: JSON.stringify(data),
+          error: "No response received. Please try again.",
         },
         { status: 500 }
       );
@@ -332,14 +324,13 @@ Return ONLY valid JSON using exactly this structure:
       );
 
       console.error(
-        "Gemini returned:",
+        "Raw response:",
         generatedText
       );
 
       return Response.json(
         {
-          error: "Gemini returned invalid JSON.",
-          details: generatedText,
+          error: "Unexpected response format. Please try again.",
         },
         { status: 500 }
       );
@@ -371,10 +362,7 @@ Return ONLY valid JSON using exactly this structure:
 
     return Response.json(
       {
-        error: "Analysis failed.",
-        details:
-          error?.message ||
-          String(error),
+        error: "Something went wrong. Please try again.",
       },
       { status: 500 }
     );

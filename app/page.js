@@ -59,12 +59,12 @@ export default function Home() {
       const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(data.error || "Analysis failed.");
+        throw new Error(data.error || "Something went wrong. Please try again.");
       }
 
       setAnalysis(data);
     } catch (err) {
-      setError(err.message || "Something went wrong.");
+      setError(err.message || "Something went wrong. Please try again.");
     } finally {
       setLoading(false);
     }
@@ -79,65 +79,18 @@ export default function Home() {
   return (
     <main className="container">
       {user && (
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "flex-end",
-            alignItems: "center",
-            gap: 12,
-            marginBottom: 10,
-            fontSize: 14,
-            color: "#667085",
-          }}
-        >
+        <div className="top-nav">
           <span>{user.email}</span>
           <a href="/learn">
-            <button
-              style={{
-                width: "auto",
-                padding: "8px 14px",
-                background: "#f2f4f7",
-                color: "#172033",
-              }}
-            >
-              Learn
-            </button>
+            <button>Learn</button>
           </a>
           <a href="/stats">
-            <button
-              style={{
-                width: "auto",
-                padding: "8px 14px",
-                background: "#f2f4f7",
-                color: "#172033",
-              }}
-            >
-              Community Stats
-            </button>
+            <button>Community Stats</button>
           </a>
           <a href="/dashboard">
-            <button
-              style={{
-                width: "auto",
-                padding: "8px 14px",
-                background: "#f2f4f7",
-                color: "#172033",
-              }}
-            >
-              History
-            </button>
+            <button>History</button>
           </a>
-          <button
-            onClick={handleLogout}
-            style={{
-              width: "auto",
-              padding: "8px 14px",
-              background: "#f2f4f7",
-              color: "#172033",
-            }}
-          >
-            Log out
-          </button>
+          <button onClick={handleLogout}>Log out</button>
         </div>
       )}
 
@@ -200,13 +153,10 @@ export default function Home() {
                 padding: "14px 16px",
                 marginBottom: 20,
                 fontWeight: 600,
-                display: "flex",
-                alignItems: "center",
-                gap: 8,
               }}
             >
-              🔁 This message closely matches a job offer already reported by
-              another user
+              This message closely matches a job offer already reported by
+              another user.
             </div>
           )}
 
@@ -237,7 +187,7 @@ export default function Home() {
                 <div className="flag-title">
                   <strong>{flag.category}</strong>
                   <span>
-                    {flag.detected ? "⚠️ Detected" : "✓ Not detected"}
+                    {flag.detected ? "Detected" : "Not detected"}
                   </span>
                 </div>
 
@@ -253,10 +203,10 @@ export default function Home() {
           </div>
 
           <button
+            className="export-btn"
             onClick={() =>
               exportReportToPDF(analysis, { companyName, senderDomain })
             }
-            style={{ marginTop: 20, background: "#172033" }}
           >
             Export Report (PDF)
           </button>
