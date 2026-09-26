@@ -7,7 +7,15 @@ const API_KEYS = [
   process.env.GEMINI_API_KEY_3,
 ].filter(Boolean);
 
-const MODEL = "gemini-3.8-flash";
+const MODELS = [
+  "gemini-3.8-flash",
+  "gemini-3.7-flash",
+  "gemini-3.6-flash",
+  "gemini-3.5-flash",
+  "gemini-3.1-flash-lite",
+  "gemini-3-flash-preview",
+];
+
 const EMBEDDING_MODEL = "gemini-embedding-001";
 const SIMILARITY_THRESHOLD = 0.86;
 
@@ -30,7 +38,18 @@ function isRateLimitOrQuotaError(status, errorMessage) {
   );
 }
 
-async function callGeminiWithKeyRotation(url, requestBody) {
+function isModelUnavailableError(status, errorMessage) {
+  const msg = (errorMessage || "").toLowerCase();
+  return (
+    status === 404 ||
+    status === 400 ||
+    msg.includes("not found") ||
+    msg.includes("not supported") ||
+    msg.includes("does not exist")
+  );
+}
+
+async function callWithKeyRotation(url, requestBody) {
   let lastResponse;
   let lastData;
 
@@ -52,16 +71,17 @@ async function callGeminiWithKeyRotation(url, requestBody) {
       lastResponse = response;
       lastData = data;
 
-      console.log(
-        `Key ${keyIndex + 1}, attempt ${attempt}:`,
-        response.status
-      );
+      console.log(`Key ${keyIndex + 1}, attempt ${attempt}:`, response.status);
 
       if (response.ok) {
         return { response, data };
       }
 
       const errorMessage = data?.error?.message || "";
+
+      if (isModelUnavailableError(response.status, errorMessage)) {
+        return { response, data, unavailable: true };
+      }
 
       if (isRateLimitOrQuotaError(response.status, errorMessage)) {
         console.log(`Key ${keyIndex + 1} rate limited, trying next key.`);
@@ -86,15 +106,42 @@ async function callGeminiWithKeyRotation(url, requestBody) {
   return { response: lastResponse, data: lastData };
 }
 
-async function getEmbedding(text) {
-  const { response, data } = await callGeminiWithKeyRotation(
-    `https://generativelanguage.googleapis.com/v1beta/models/${EMBEDDING_MODEL}:embedContent`,
-    {
-      content: { parts: [{ text }] },
-      taskType: "SEMANTIC_SIMILARITY",
-      outputDimensionality: 768,
+async function callGeminiWithModelFallback(requestBody) {
+  let lastResult;
+
+  for (const model of MODELS) {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+
+    console.log(`Trying model: ${model}`);
+
+    const result = await callWithKeyRotation(url, requestBody);
+    lastResult = result;
+
+    if (result.response?.ok) {
+      return result;
     }
-  );
+
+    if (!result.unavailable) {
+      const errorMessage = result.data?.error?.message || "";
+      if (!isRateLimitOrQuotaError(result.response?.status, errorMessage)) {
+        return result;
+      }
+    }
+
+    console.log(`Model ${model} unavailable or exhausted, trying next model.`);
+  }
+
+  return lastResult;
+}
+
+async function getEmbedding(text) {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${EMBEDDING_MODEL}:embedContent`;
+
+  const { response, data } = await callWithKeyRotation(url, {
+    content: { parts: [{ text }] },
+    taskType: "SEMANTIC_SIMILARITY",
+    outputDimensionality: 768,
+  });
 
   if (!response?.ok || !data?.embedding?.values) {
     console.error("Embedding error:", data);
@@ -285,10 +332,7 @@ Return ONLY valid JSON using exactly this structure:
       },
     };
 
-    const { response, data } = await callGeminiWithKeyRotation(
-      `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`,
-      requestBody
-    );
+    const { response, data } = await callGeminiWithModelFallback(requestBody);
 
     if (!response?.ok) {
       return Response.json(
@@ -318,15 +362,8 @@ Return ONLY valid JSON using exactly this structure:
     try {
       analysis = JSON.parse(generatedText);
     } catch (parseError) {
-      console.error(
-        "JSON parsing error:",
-        parseError
-      );
-
-      console.error(
-        "Raw response:",
-        generatedText
-      );
+      console.error("JSON parsing error:", parseError);
+      console.error("Raw response:", generatedText);
 
       return Response.json(
         {
@@ -355,10 +392,7 @@ Return ONLY valid JSON using exactly this structure:
     return Response.json(analysis);
 
   } catch (error) {
-    console.error(
-      "Analysis error:",
-      error
-    );
+    console.error("Analysis error:", error);
 
     return Response.json(
       {

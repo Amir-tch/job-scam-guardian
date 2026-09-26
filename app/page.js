@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "./lib/supabase";
 import { exportReportToPDF } from "./lib/exportReport";
@@ -14,7 +14,10 @@ export default function Home() {
   const [senderDomain, setSenderDomain] = useState("");
   const [analysis, setAnalysis] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [loadingText, setLoadingText] = useState("Analyzing...");
   const [error, setError] = useState("");
+
+  const timeoutRef = useRef(null);
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => {
@@ -41,6 +44,11 @@ export default function Home() {
     }
 
     setLoading(true);
+    setLoadingText("Analyzing...");
+
+    timeoutRef.current = setTimeout(() => {
+      setLoadingText("Still analyzing, this may take a moment...");
+    }, 5000);
 
     try {
       const response = await fetch("/api/analyze", {
@@ -66,6 +74,7 @@ export default function Home() {
     } catch (err) {
       setError(err.message || "Something went wrong. Please try again.");
     } finally {
+      clearTimeout(timeoutRef.current);
       setLoading(false);
     }
   }
@@ -137,7 +146,7 @@ export default function Home() {
         {error && <div className="error">{error}</div>}
 
         <button onClick={analyzeJob} disabled={loading}>
-          {loading ? "Analyzing..." : "Analyze Job Offer"}
+          {loading ? loadingText : "Analyze Job Offer"}
         </button>
       </section>
 
