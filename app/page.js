@@ -190,6 +190,26 @@ export default function Home() {
 
       {analysis && (
         <section className="results">
+          {analysis.matchedPrevious && (
+            <div
+              style={{
+                background: "#fff3cd",
+                color: "#946200",
+                border: "1px solid #ffe69c",
+                borderRadius: 10,
+                padding: "14px 16px",
+                marginBottom: 20,
+                fontWeight: 600,
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+              }}
+            >
+              🔁 This message closely matches a job offer already reported by
+              another user
+            </div>
+          )}
+
           <div className="result-header">
             <h2>Analysis Results</h2>
             <div className={`risk ${getRiskClass(analysis.riskLevel)}`}>

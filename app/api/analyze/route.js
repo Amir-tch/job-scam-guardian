@@ -1,9 +1,15 @@
 import { createClient } from "@supabase/supabase-js";
 import { SALARY_BENCHMARKS } from "../../lib/salaryBenchmarks";
 
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const API_KEYS = [
+  process.env.GEMINI_API_KEY,
+  process.env.GEMINI_API_KEY_2,
+  process.env.GEMINI_API_KEY_3,
+].filter(Boolean);
 
 const MODEL = "gemini-3.8-flash";
+const EMBEDDING_MODEL = "gemini-embedding-001";
+const SIMILARITY_THRESHOLD = 0.86;
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -14,12 +20,96 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function isRateLimitOrQuotaError(status, errorMessage) {
+  const msg = (errorMessage || "").toLowerCase();
+  return (
+    status === 429 ||
+    msg.includes("quota") ||
+    msg.includes("rate limit") ||
+    msg.includes("resource_exhausted")
+  );
+}
+
+async function callGeminiWithKeyRotation(url, requestBody) {
+  let lastResponse;
+  let lastData;
+
+  for (let keyIndex = 0; keyIndex < API_KEYS.length; keyIndex++) {
+    const key = API_KEYS[keyIndex];
+
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": key,
+        },
+        body: JSON.stringify(requestBody),
+      });
+
+      const data = await response.json();
+
+      lastResponse = response;
+      lastData = data;
+
+      console.log(
+        `Key ${keyIndex + 1}, attempt ${attempt}:`,
+        response.status
+      );
+
+      if (response.ok) {
+        return { response, data };
+      }
+
+      const errorMessage = data?.error?.message || "";
+
+      if (isRateLimitOrQuotaError(response.status, errorMessage)) {
+        console.log(`Key ${keyIndex + 1} rate limited, trying next key.`);
+        break;
+      }
+
+      const isTemporaryError =
+        response.status === 500 ||
+        response.status === 502 ||
+        response.status === 503 ||
+        errorMessage.toLowerCase().includes("high demand") ||
+        errorMessage.toLowerCase().includes("temporarily");
+
+      if (!isTemporaryError || attempt === 3) {
+        break;
+      }
+
+      await sleep(attempt * 4000);
+    }
+  }
+
+  return { response: lastResponse, data: lastData };
+}
+
+async function getEmbedding(text) {
+  const { response, data } = await callGeminiWithKeyRotation(
+    `https://generativelanguage.googleapis.com/v1beta/models/${EMBEDDING_MODEL}:embedContent`,
+    {
+      content: { parts: [{ text }] },
+      taskType: "SEMANTIC_SIMILARITY",
+      outputDimensionality: 768,
+    }
+  );
+
+  if (!response?.ok || !data?.embedding?.values) {
+    console.error("Embedding error:", data);
+    return null;
+  }
+
+  return data.embedding.values;
+}
+
 export async function POST(request) {
   try {
-    if (!GEMINI_API_KEY) {
+    if (API_KEYS.length === 0) {
       return Response.json(
         {
-          error: "GEMINI_API_KEY is missing.",
+          error: "No Gemini API keys configured.",
           details:
             "Make sure GEMINI_API_KEY exists in your .env.local file.",
         },
@@ -45,58 +135,69 @@ export async function POST(request) {
       );
     }
 
-    const { data: matches, error: matchError } = await supabase.rpc(
-      "match_similar_check",
-      {
-        input_text: messageText,
-        threshold: 0.55,
+    const embedding = await getEmbedding(messageText);
+    const embeddingString = embedding ? `[${embedding.join(",")}]` : null;
+
+    if (embeddingString) {
+      const { data: matches, error: matchError } = await supabase.rpc(
+        "match_similar_check",
+        {
+          query_embedding: embeddingString,
+          match_threshold: SIMILARITY_THRESHOLD,
+        }
+      );
+
+      if (matchError) {
+        console.error("Similarity match error:", matchError);
       }
-    );
-
-    if (matchError) {
-      console.error("Similarity match error:", matchError);
-    }
-
-    if (matches && matches.length > 0) {
-      const match = matches[0];
-
-      let summary = match.summary;
 
       if (
-        (match.company_name && match.company_name !== companyName) ||
-        (match.sender_domain && match.sender_domain !== senderDomain)
+        matches &&
+        matches.length > 0 &&
+        matches[0].similarity_score >= SIMILARITY_THRESHOLD
       ) {
-        summary += ` This message closely matches a job offer reported earlier${
-          match.company_name ? ` under the company name "${match.company_name}"` : ""
-        }${
-          match.sender_domain ? ` and sender domain "${match.sender_domain}"` : ""
-        }. Scammers often reuse the same message template with small changes.`;
+        const match = matches[0];
+
+        let summary = match.summary;
+        let matchedPrevious = true;
+
+        if (
+          (match.company_name && match.company_name !== companyName) ||
+          (match.sender_domain && match.sender_domain !== senderDomain)
+        ) {
+          summary += ` This message closely matches a job offer reported earlier${
+            match.company_name ? ` under the company name "${match.company_name}"` : ""
+          }${
+            match.sender_domain ? ` and sender domain "${match.sender_domain}"` : ""
+          }. Scammers often reuse the same message template with small changes.`;
+        }
+
+        const analysis = {
+          riskScore: match.risk_score,
+          riskLevel: match.risk_level,
+          flags: match.flags,
+          summary,
+          matchedPrevious,
+        };
+
+        const { error: dbError } = await supabase.from("checks").insert({
+          message_text: messageText,
+          company_name: companyName || null,
+          sender_domain: senderDomain || null,
+          risk_score: analysis.riskScore,
+          risk_level: analysis.riskLevel,
+          summary: analysis.summary,
+          flags: analysis.flags,
+          user_id: userId || null,
+          embedding: embeddingString,
+        });
+
+        if (dbError) {
+          console.error("Supabase insert error:", dbError);
+        }
+
+        return Response.json(analysis);
       }
-
-      const analysis = {
-        riskScore: match.risk_score,
-        riskLevel: match.risk_level,
-        flags: match.flags,
-        summary,
-        matchedPrevious: true,
-      };
-
-      const { error: dbError } = await supabase.from("checks").insert({
-        message_text: messageText,
-        company_name: companyName || null,
-        sender_domain: senderDomain || null,
-        risk_score: analysis.riskScore,
-        risk_level: analysis.riskLevel,
-        summary: analysis.summary,
-        flags: analysis.flags,
-        user_id: userId || null,
-      });
-
-      if (dbError) {
-        console.error("Supabase insert error:", dbError);
-      }
-
-      return Response.json(analysis);
     }
 
     const prompt = `
@@ -186,57 +287,12 @@ Return ONLY valid JSON using exactly this structure:
       },
     };
 
-    let response;
-    let data;
-
-    for (let attempt = 1; attempt <= 5; attempt++) {
-      response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "x-goog-api-key": GEMINI_API_KEY,
-          },
-          body: JSON.stringify(requestBody),
-        }
-      );
-
-      data = await response.json();
-
-      console.log(
-        `Gemini attempt ${attempt}:`,
-        response.status
-      );
-
-      if (response.ok) {
-        break;
-      }
-
-      const errorMessage =
-        data?.error?.message || "";
-
-      const isTemporaryError =
-        response.status === 429 ||
-        response.status === 500 ||
-        response.status === 502 ||
-        response.status === 503 ||
-        errorMessage.toLowerCase().includes("high demand") ||
-        errorMessage.toLowerCase().includes("temporarily");
-
-      if (!isTemporaryError || attempt === 5) {
-        break;
-      }
-
-      await sleep(attempt * 4000);
-    }
-
-    console.log(
-      "Gemini response:",
-      JSON.stringify(data, null, 2)
+    const { response, data } = await callGeminiWithKeyRotation(
+      `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`,
+      requestBody
     );
 
-    if (!response.ok) {
+    if (!response?.ok) {
       const message =
         data?.error?.message ||
         "Unknown Gemini API error.";
@@ -247,7 +303,7 @@ Return ONLY valid JSON using exactly this structure:
           details: message,
         },
         {
-          status: response.status,
+          status: response?.status || 500,
         }
       );
     }
@@ -298,6 +354,7 @@ Return ONLY valid JSON using exactly this structure:
       summary: analysis.summary,
       flags: analysis.flags,
       user_id: userId || null,
+      embedding: embeddingString,
     });
 
     if (dbError) {
