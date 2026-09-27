@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "./lib/supabase";
 import { exportReportToPDF } from "./lib/exportReport";
+import BottomNav from "./components/BottomNav";
 
 export default function Home() {
   const router = useRouter();
@@ -28,11 +29,6 @@ export default function Home() {
       }
     });
   }, [router]);
-
-  async function handleLogout() {
-    await supabase.auth.signOut();
-    router.push("/learn");
-  }
 
   async function analyzeJob() {
     setError("");
@@ -86,150 +82,139 @@ export default function Home() {
   }
 
   return (
-    <main className="container">
-      {user && (
-        <div className="top-nav">
-          <span>{user.email}</span>
-          <a href="/learn">
-            <button>Learn</button>
-          </a>
-          <a href="/stats">
-            <button>Community Stats</button>
-          </a>
-          <a href="/dashboard">
-            <button>History</button>
-          </a>
-          <button onClick={handleLogout}>Log out</button>
-        </div>
-      )}
+    <>
+      <main className="container">
+        {user && <div className="top-bar">{user.email}</div>}
 
-      <section className="hero">
-        <div className="badge">🛡️ JOB SCAM GUARDIAN</div>
-        <h1>Is this job offer a scam?</h1>
-        <p>
-          Paste a job offer message below and let AI check it for common scam
-          patterns.
-        </p>
-      </section>
+        <section className="hero">
+          <div className="badge">JOB SCAM GUARDIAN</div>
+          <h1>Is this job offer a scam?</h1>
+          <p>
+            Paste a job offer message below and let AI check it for common
+            scam patterns.
+          </p>
+        </section>
 
-      <section className="card">
-        <label>Job offer message *</label>
-        <textarea
-          value={messageText}
-          onChange={(e) => setMessageText(e.target.value)}
-          placeholder="Paste the job offer message here..."
-          rows={10}
-        />
+        <section className="card">
+          <label>Job offer message</label>
+          <textarea
+            value={messageText}
+            onChange={(e) => setMessageText(e.target.value)}
+            placeholder="Paste the job offer message here..."
+            rows={10}
+          />
 
-        <div className="grid">
-          <div>
-            <label>Company Name</label>
-            <input
-              type="text"
-              value={companyName}
-              onChange={(e) => setCompanyName(e.target.value)}
-              placeholder="e.g. Microsoft"
-            />
-          </div>
-
-          <div>
-            <label>Sender Email Domain</label>
-            <input
-              type="text"
-              value={senderDomain}
-              onChange={(e) => setSenderDomain(e.target.value)}
-              placeholder="e.g. company.com"
-            />
-          </div>
-        </div>
-
-        {error && <div className="error">{error}</div>}
-
-        <button onClick={analyzeJob} disabled={loading}>
-          {loading ? loadingText : "Analyze Job Offer"}
-        </button>
-      </section>
-
-      {analysis && (
-        <section className="results">
-          {analysis.matchedPrevious && (
-            <div
-              style={{
-                background: "#fff3cd",
-                color: "#946200",
-                border: "1px solid #ffe69c",
-                borderRadius: 10,
-                padding: "14px 16px",
-                marginBottom: 20,
-                fontWeight: 600,
-              }}
-            >
-              This message closely matches a job offer already reported by
-              another user.
+          <div className="grid">
+            <div>
+              <label>Company name</label>
+              <input
+                type="text"
+                value={companyName}
+                onChange={(e) => setCompanyName(e.target.value)}
+                placeholder="e.g. Microsoft"
+              />
             </div>
-          )}
 
-          <div className="result-header">
-            <h2>Analysis Results</h2>
-            <div className={`risk ${getRiskClass(analysis.riskLevel)}`}>
-              {analysis.riskLevel?.toUpperCase()} RISK
+            <div>
+              <label>Sender email domain</label>
+              <input
+                type="text"
+                value={senderDomain}
+                onChange={(e) => setSenderDomain(e.target.value)}
+                placeholder="e.g. company.com"
+              />
             </div>
           </div>
 
-          <div className="score">
-            <span>Risk Score</span>
-            <strong>{analysis.riskScore}/100</strong>
-          </div>
+          {error && <div className="error">{error}</div>}
 
-          <div className="summary">
-            <h3>Summary</h3>
-            <p>{analysis.summary}</p>
-          </div>
-
-          <div className="flags">
-            <h3>Warning Signs</h3>
-            {analysis.flags?.map((flag, index) => (
-              <div
-                className={`flag ${flag.detected ? "detected" : "safe"}`}
-                key={index}
-              >
-                <div className="flag-title">
-                  <strong>{flag.category}</strong>
-                  <span>
-                    {flag.detected ? "Detected" : "Not detected"}
-                  </span>
-                </div>
-
-                {flag.detected && flag.evidence && (
-                  <div className="evidence">
-                    <strong>Evidence:</strong> "{flag.evidence}"
-                  </div>
-                )}
-
-                <p>{flag.explanation}</p>
-              </div>
-            ))}
-          </div>
-
-          <button
-            className="export-btn"
-            onClick={() =>
-              exportReportToPDF(analysis, { companyName, senderDomain })
-            }
-          >
-            Export Report (PDF)
+          <button onClick={analyzeJob} disabled={loading}>
+            {loading ? loadingText : "Analyze this job offer"}
           </button>
         </section>
-      )}
 
-      <footer>
-        <p>
-          <strong>Important:</strong> This tool provides an educational risk
-          assessment. A high or low score does not prove whether a job offer
-          or company is legitimate. Always verify the employer independently
-          before sharing personal information or sending money.
-        </p>
-      </footer>
-    </main>
+        {loading && (
+          <section className="results">
+            <div className="skeleton skeleton-line" style={{ width: "40%" }} />
+            <div className="skeleton skeleton-block" />
+            <div className="skeleton skeleton-line" style={{ width: "90%" }} />
+            <div className="skeleton skeleton-line" style={{ width: "75%" }} />
+            <div className="skeleton skeleton-block" />
+            <div className="skeleton skeleton-block" />
+          </section>
+        )}
+
+        {analysis && !loading && (
+          <section className="results">
+            {analysis.matchedPrevious && (
+              <div className="match-banner">
+                This message closely matches a job offer already reported by
+                another user.
+              </div>
+            )}
+
+            <div className="result-header">
+              <h2>Analysis results</h2>
+              <div className={`risk ${getRiskClass(analysis.riskLevel)}`}>
+                {analysis.riskLevel?.toUpperCase()} RISK
+              </div>
+            </div>
+
+            <div className="score">
+              <span>Risk score</span>
+              <strong>{analysis.riskScore}/100</strong>
+            </div>
+
+            <div className="summary">
+              <h3>Summary</h3>
+              <p>{analysis.summary}</p>
+            </div>
+
+            <div className="flags">
+              <h3>Warning signs</h3>
+              {analysis.flags?.map((flag, index) => (
+                <div
+                  className={`flag ${flag.detected ? "detected" : "safe"}`}
+                  key={index}
+                >
+                  <div className="flag-title">
+                    <strong>{flag.category}</strong>
+                    <span>{flag.detected ? "Detected" : "Not detected"}</span>
+                  </div>
+
+                  {flag.detected && flag.evidence && (
+                    <div className="evidence">
+                      <strong>Evidence:</strong> "{flag.evidence}"
+                    </div>
+                  )}
+
+                  <p>{flag.explanation}</p>
+                </div>
+              ))}
+            </div>
+
+            <button
+              className="export-btn"
+              onClick={() =>
+                exportReportToPDF(analysis, { companyName, senderDomain })
+              }
+            >
+              Download this report
+            </button>
+          </section>
+        )}
+
+        <footer>
+          <p>
+            This tool provides an educational risk assessment. A high or low
+            score does not prove whether a job offer or company is
+            legitimate. Always verify the employer independently before
+            sharing personal information or sending money.
+          </p>
+        </footer>
+      </main>
+
+      <BottomNav />
+    </>
   );
 }
