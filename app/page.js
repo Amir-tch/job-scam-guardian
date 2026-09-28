@@ -81,7 +81,7 @@ export default function Home() {
     if (file) handleFile(file);
   }
 
-  async function analyzeJob() {
+  async function analyzeJob(forceFresh = false) {
     setError("");
     setAnalysis(null);
 
@@ -113,6 +113,7 @@ export default function Home() {
           userId: user?.id || null,
           imageBase64,
           imageMimeType,
+          forceFresh,
         }),
       });
 
@@ -261,7 +262,7 @@ export default function Home() {
 
           {error && <div className="error">{error}</div>}
 
-          <button onClick={analyzeJob} disabled={loading}>
+          <button onClick={() => analyzeJob(false)} disabled={loading}>
             {loading ? loadingText : "Analyze this job offer"}
           </button>
         </section>
@@ -281,8 +282,23 @@ export default function Home() {
           <section className="results">
             {analysis.matchedPrevious && (
               <div className="match-banner">
-                This message closely matches a job offer already reported by
-                another user.
+                <div style={{ marginBottom: 10 }}>
+                  This result comes from a similar message already reported
+                  by another user. It may not reflect every detail of your
+                  exact message.
+                </div>
+                <button
+                  type="button"
+                  onClick={() => analyzeJob(true)}
+                  style={{
+                    width: "auto",
+                    padding: "8px 14px",
+                    fontSize: 13,
+                    background: "#92400e",
+                  }}
+                >
+                  Run a fresh analysis instead
+                </button>
               </div>
             )}
 

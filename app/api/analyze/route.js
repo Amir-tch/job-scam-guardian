@@ -289,6 +289,7 @@ export async function POST(request) {
       userId,
       imageBase64,
       imageMimeType,
+      forceFresh,
     } = body;
 
     const hasImage = !!imageBase64;
@@ -309,7 +310,7 @@ export async function POST(request) {
       const embedding = await getEmbedding(messageText);
       embeddingString = embedding ? `[${embedding.join(",")}]` : null;
 
-      if (embeddingString) {
+      if (embeddingString && !forceFresh) {
         const { data: matches, error: matchError } = await supabase.rpc(
           "match_similar_check",
           {
