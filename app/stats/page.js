@@ -65,7 +65,8 @@ export default function Stats() {
     async function load() {
       const { data, error } = await supabase
         .from("scam_signals")
-        .select("risk_level, risk_score, flags");
+        .select("risk_level, risk_score, flags")
+        .eq("ai_generated", true);
 
       if (!error && data) {
         const total = data.length;

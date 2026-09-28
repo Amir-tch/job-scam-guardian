@@ -425,6 +425,7 @@ export async function POST(request) {
             flags: analysis.flags,
             security: analysis.security,
             embedding: embeddingString,
+            ai_generated: true,
           });
 
           if (signalError) {
@@ -469,6 +470,7 @@ export async function POST(request) {
 
     let analysis;
     let finalMessageText;
+    let aiGenerated = true;
 
     if (!response?.ok) {
       if (hasImage) {
@@ -484,6 +486,7 @@ export async function POST(request) {
       console.log("Gemini fully unavailable, falling back to signal library.");
 
       finalMessageText = messageText;
+      aiGenerated = false;
       const fallback = runSignalLibrary(messageText, companyName, senderDomain);
       const linkInfo = await checkSafeBrowsing(extractUrls(finalMessageText));
       analysis = applySecurity(fallback, domainInfo, linkInfo);
@@ -556,6 +559,7 @@ export async function POST(request) {
       flags: analysis.flags,
       security: analysis.security,
       embedding: embeddingString,
+      ai_generated: aiGenerated,
     });
 
     if (signalError) {
