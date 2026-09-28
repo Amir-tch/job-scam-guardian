@@ -133,6 +133,38 @@ export default function Home() {
     }
   }
 
+  function getDomainAgeLine(domain) {
+    if (!domain) return { text: "No sender domain provided.", bad: false };
+    if (domain.freeProvider)
+      return {
+        text: `${domain.domain} is a free email provider, so no registration age applies.`,
+        bad: false,
+      };
+    if (domain.unknown || domain.ageDays === undefined)
+      return {
+        text: `Registration date for ${domain.domain} could not be retrieved.`,
+        bad: false,
+      };
+    return {
+      text: `${domain.domain} was registered on ${domain.registeredOn} (${domain.ageDays} days ago).`,
+      bad: domain.ageDays < 90,
+    };
+  }
+
+  function getLinkLine(links) {
+    if (!links || !links.checked)
+      return { text: "No links were checked.", bad: false };
+    if (links.unsafe?.length > 0)
+      return {
+        text: `${links.unsafe.length} link(s) flagged as unsafe by Google Safe Browsing.`,
+        bad: true,
+      };
+    return {
+      text: `${links.urlCount} link(s) checked, none flagged by Google Safe Browsing.`,
+      bad: false,
+    };
+  }
+
   function getRiskClass(level) {
     if (level === "high") return "risk-high";
     if (level === "medium") return "risk-medium";
@@ -318,6 +350,46 @@ export default function Home() {
               <h3>Summary</h3>
               <p>{analysis.summary}</p>
             </div>
+
+            {analysis.security && (
+              <div className="summary">
+                <h3>Security checks</h3>
+                {[
+                  { label: "Domain age", ...getDomainAgeLine(analysis.security.domain) },
+                  { label: "Link safety", ...getLinkLine(analysis.security.links) },
+                ].map((item) => (
+                  <div
+                    key={item.label}
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      gap: 12,
+                      padding: "8px 0",
+                      borderTop: "1px solid #e5e7eb",
+                      fontSize: 14,
+                    }}
+                  >
+                    <strong>{item.label}</strong>
+                    <span
+                      style={{
+                        textAlign: "right",
+                        color: item.bad ? "#b42318" : "inherit",
+                      }}
+                    >
+                      {item.text}
+                    </span>
+                  </div>
+                ))}
+                {analysis.security.links?.unsafe?.map((u, i) => (
+                  <div
+                    key={i}
+                    style={{ fontSize: 13, color: "#b42318", wordBreak: "break-all" }}
+                  >
+                    {u.url} ({u.threatType})
+                  </div>
+                ))}
+              </div>
+            )}
 
             <div className="flags">
               <h3>Warning signs</h3>

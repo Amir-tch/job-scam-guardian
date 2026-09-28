@@ -1,5 +1,12 @@
 import { createClient } from "@supabase/supabase-js";
 import { SALARY_BENCHMARKS } from "../../lib/salaryBenchmarks";
+import {
+  getDomainAge,
+  checkSafeBrowsing,
+  extractUrls,
+  describeDomainAge,
+  applySecurity,
+} from "../../lib/securityChecks";
 
 const API_KEYS = [
   process.env.GEMINI_API_KEY,
@@ -215,7 +222,7 @@ Return ONLY valid JSON using exactly this structure:
 "extractedText" must contain the exact job offer text found in the input (transcribed from the image if one was provided, or the original message text if plain text was provided). Do not summarize or paraphrase it, transcribe it as written.
 `;
 
-function buildAnalysisInstructions(companyName, senderDomain) {
+function buildAnalysisInstructions(companyName, senderDomain, domainInfo) {
   return `
 You are a job scam detection analyst focused on Nigeria and remote job offers.
 
@@ -226,6 +233,9 @@ ${companyName || "Not provided"}
 
 SENDER DOMAIN:
 ${senderDomain || "Not provided"}
+
+DOMAIN REGISTRATION DATA:
+${describeDomainAge(domainInfo)}
 
 Use this salary benchmark data to judge the "Implausible salary" category:
 
@@ -248,6 +258,8 @@ For every category:
 - if detected is false, evidence must be an empty string
 - explanation must be written in simple English
 - for the Implausible salary category specifically, explicitly reference the benchmark range for the closest matching role when explaining your reasoning
+
+For the Domain mismatch category, a sender domain registered less than 90 days ago is a supporting signal only, not proof on its own. Domain registration data may be "Not available", in which case ignore it.
 
 Only use information actually present in the message.
 
@@ -304,6 +316,8 @@ export async function POST(request) {
       );
     }
 
+    const domainInfo = await getDomainAge(senderDomain);
+
     let embeddingString = null;
 
     if (hasText && !hasImage) {
@@ -344,13 +358,16 @@ export async function POST(request) {
             }. Scammers often reuse the same message template with small changes.`;
           }
 
-          const analysis = {
+          const baseAnalysis = {
             riskScore: match.risk_score,
             riskLevel: match.risk_level,
             flags: match.flags,
             summary,
             matchedPrevious,
           };
+
+          const cachedLinkInfo = await checkSafeBrowsing(extractUrls(messageText));
+          const analysis = applySecurity(baseAnalysis, domainInfo, cachedLinkInfo);
 
           const { error: dbError } = await supabase.from("checks").insert({
             message_text: messageText,
@@ -362,6 +379,7 @@ export async function POST(request) {
             flags: analysis.flags,
             user_id: userId || null,
             embedding: embeddingString,
+            security: analysis.security,
           });
 
           if (dbError) {
@@ -373,7 +391,11 @@ export async function POST(request) {
       }
     }
 
-    const instructions = buildAnalysisInstructions(companyName, senderDomain);
+    const instructions = buildAnalysisInstructions(
+      companyName,
+      senderDomain,
+      domainInfo
+    );
 
     const parts = [];
 
@@ -446,6 +468,9 @@ export async function POST(request) {
       embeddingString = embedding ? `[${embedding.join(",")}]` : null;
     }
 
+    const linkInfo = await checkSafeBrowsing(extractUrls(finalMessageText));
+    analysis = applySecurity(analysis, domainInfo, linkInfo);
+
     const { error: dbError } = await supabase.from("checks").insert({
       message_text: finalMessageText,
       company_name: companyName || null,
@@ -456,6 +481,7 @@ export async function POST(request) {
       flags: analysis.flags,
       user_id: userId || null,
       embedding: embeddingString,
+      security: analysis.security,
     });
 
     if (dbError) {
