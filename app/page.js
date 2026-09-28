@@ -18,7 +18,13 @@ export default function Home() {
   const [loadingText, setLoadingText] = useState("Analyzing...");
   const [error, setError] = useState("");
 
+  const [imagePreview, setImagePreview] = useState(null);
+  const [imageBase64, setImageBase64] = useState(null);
+  const [imageMimeType, setImageMimeType] = useState(null);
+  const [dragActive, setDragActive] = useState(false);
+
   const timeoutRef = useRef(null);
+  const fileInputRef = useRef(null);
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => {
@@ -30,12 +36,60 @@ export default function Home() {
     });
   }, [router]);
 
+  function handleFile(file) {
+    if (!file || !file.type.startsWith("image/")) {
+      setError("Please upload an image file (screenshot, photo, etc.).");
+      return;
+    }
+
+    setError("");
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result;
+      const base64 = result.split(",")[1];
+      setImageBase64(base64);
+      setImageMimeType(file.type);
+      setImagePreview(result);
+    };
+    reader.readAsDataURL(file);
+  }
+
+  function removeImage() {
+    setImagePreview(null);
+    setImageBase64(null);
+    setImageMimeType(null);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  }
+
+  function handlePaste(e) {
+    const items = e.clipboardData?.items || [];
+    for (const item of items) {
+      if (item.type.startsWith("image/")) {
+        const file = item.getAsFile();
+        handleFile(file);
+        e.preventDefault();
+        break;
+      }
+    }
+  }
+
+  function handleDrop(e) {
+    e.preventDefault();
+    setDragActive(false);
+    const file = e.dataTransfer.files?.[0];
+    if (file) handleFile(file);
+  }
+
   async function analyzeJob() {
     setError("");
     setAnalysis(null);
 
-    if (messageText.trim().length < 10) {
-      setError("Please paste a job offer message first.");
+    const hasText = messageText.trim().length >= 10;
+    const hasImage = !!imageBase64;
+
+    if (!hasText && !hasImage) {
+      setError("Please paste a job offer message or upload an image first.");
       return;
     }
 
@@ -57,6 +111,8 @@ export default function Home() {
           companyName,
           senderDomain,
           userId: user?.id || null,
+          imageBase64,
+          imageMimeType,
         }),
       });
 
@@ -67,6 +123,7 @@ export default function Home() {
       }
 
       setAnalysis(data);
+      if (data.messageText) setMessageText(data.messageText);
     } catch (err) {
       setError(err.message || "Something went wrong. Please try again.");
     } finally {
@@ -90,19 +147,95 @@ export default function Home() {
           <div className="badge">JOB SCAM GUARDIAN</div>
           <h1>Is this job offer a scam?</h1>
           <p>
-            Paste a job offer message below and let AI check it for common
-            scam patterns.
+            Paste a job offer message, upload a screenshot, or drag an image
+            in below and let AI check it for common scam patterns.
           </p>
         </section>
 
         <section className="card">
           <label>Job offer message</label>
-          <textarea
-            value={messageText}
-            onChange={(e) => setMessageText(e.target.value)}
-            placeholder="Paste the job offer message here..."
-            rows={10}
-          />
+          <div
+            onDragOver={(e) => {
+              e.preventDefault();
+              setDragActive(true);
+            }}
+            onDragLeave={() => setDragActive(false)}
+            onDrop={handleDrop}
+            style={{
+              border: dragActive ? "2px dashed #2d3648" : "none",
+              borderRadius: 8,
+            }}
+          >
+            <textarea
+              value={messageText}
+              onChange={(e) => setMessageText(e.target.value)}
+              onPaste={handlePaste}
+              placeholder="Paste the job offer message here, or paste/drag an image..."
+              rows={10}
+            />
+          </div>
+
+          <div style={{ marginBottom: 20 }}>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              onChange={(e) => handleFile(e.target.files?.[0])}
+              style={{ display: "none" }}
+            />
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              style={{
+                width: "auto",
+                padding: "10px 16px",
+                background: "#f3f4f6",
+                color: "#1a1a1a",
+                fontSize: 14,
+              }}
+            >
+              Attach a screenshot
+            </button>
+          </div>
+
+          {imagePreview && (
+            <div
+              style={{
+                marginBottom: 20,
+                position: "relative",
+                display: "inline-block",
+              }}
+            >
+              <img
+                src={imagePreview}
+                alt="Uploaded job offer"
+                style={{
+                  maxWidth: "200px",
+                  maxHeight: "200px",
+                  borderRadius: 8,
+                  border: "1px solid #e5e7eb",
+                  display: "block",
+                }}
+              />
+              <button
+                type="button"
+                onClick={removeImage}
+                style={{
+                  position: "absolute",
+                  top: -8,
+                  right: -8,
+                  width: 24,
+                  height: 24,
+                  padding: 0,
+                  borderRadius: "50%",
+                  background: "#b42318",
+                  fontSize: 12,
+                }}
+              >
+                X
+              </button>
+            </div>
+          )}
 
           <div className="grid">
             <div>

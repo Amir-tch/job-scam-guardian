@@ -28,6 +28,39 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function getNextPacificMidnight() {
+  const now = new Date();
+  const pacificString = now.toLocaleString("en-US", {
+    timeZone: "America/Los_Angeles",
+  });
+  const pacificNow = new Date(pacificString);
+  const nextMidnightPacific = new Date(pacificNow);
+  nextMidnightPacific.setHours(24, 0, 0, 0);
+  const offsetMs = now.getTime() - pacificNow.getTime();
+  return new Date(nextMidnightPacific.getTime() + offsetMs);
+}
+
+async function isExhausted(keyIndex, model) {
+  const { data } = await supabase
+    .from("api_exhaustion")
+    .select("exhausted_until")
+    .eq("key_index", keyIndex)
+    .eq("model", model)
+    .maybeSingle();
+
+  if (!data) return false;
+  return new Date(data.exhausted_until) > new Date();
+}
+
+async function markExhausted(keyIndex, model) {
+  const until = getNextPacificMidnight();
+  await supabase.from("api_exhaustion").upsert({
+    key_index: keyIndex,
+    model,
+    exhausted_until: until.toISOString(),
+  });
+}
+
 function isRateLimitOrQuotaError(status, errorMessage) {
   const msg = (errorMessage || "").toLowerCase();
   return (
@@ -49,12 +82,17 @@ function isModelUnavailableError(status, errorMessage) {
   );
 }
 
-async function callWithKeyRotation(url, requestBody) {
+async function callWithKeyRotation(url, requestBody, model) {
   let lastResponse;
   let lastData;
 
   for (let keyIndex = 0; keyIndex < API_KEYS.length; keyIndex++) {
     const key = API_KEYS[keyIndex];
+
+    if (model && (await isExhausted(keyIndex, model))) {
+      console.log(`Key ${keyIndex + 1} + ${model} cached as exhausted, skipping.`);
+      continue;
+    }
 
     for (let attempt = 1; attempt <= 3; attempt++) {
       const response = await fetch(url, {
@@ -84,7 +122,8 @@ async function callWithKeyRotation(url, requestBody) {
       }
 
       if (isRateLimitOrQuotaError(response.status, errorMessage)) {
-        console.log(`Key ${keyIndex + 1} rate limited, trying next key.`);
+        console.log(`Key ${keyIndex + 1} rate limited, caching and trying next key.`);
+        if (model) await markExhausted(keyIndex, model);
         break;
       }
 
@@ -114,7 +153,7 @@ async function callGeminiWithModelFallback(requestBody) {
 
     console.log(`Trying model: ${model}`);
 
-    const result = await callWithKeyRotation(url, requestBody);
+    const result = await callWithKeyRotation(url, requestBody, model);
     lastResult = result;
 
     if (result.response?.ok) {
@@ -137,11 +176,15 @@ async function callGeminiWithModelFallback(requestBody) {
 async function getEmbedding(text) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${EMBEDDING_MODEL}:embedContent`;
 
-  const { response, data } = await callWithKeyRotation(url, {
-    content: { parts: [{ text }] },
-    taskType: "SEMANTIC_SIMILARITY",
-    outputDimensionality: 768,
-  });
+  const { response, data } = await callWithKeyRotation(
+    url,
+    {
+      content: { parts: [{ text }] },
+      taskType: "SEMANTIC_SIMILARITY",
+      outputDimensionality: 768,
+    },
+    EMBEDDING_MODEL
+  );
 
   if (!response?.ok || !data?.embedding?.values) {
     console.error("Embedding error:", data);
@@ -151,109 +194,32 @@ async function getEmbedding(text) {
   return data.embedding.values;
 }
 
-export async function POST(request) {
-  try {
-    if (API_KEYS.length === 0) {
-      return Response.json(
-        {
-          error: "Service configuration error.",
-        },
-        { status: 500 }
-      );
+const RESPONSE_SCHEMA_INSTRUCTIONS = `
+Return ONLY valid JSON using exactly this structure:
+
+{
+  "extractedText": "",
+  "riskScore": 0,
+  "riskLevel": "low",
+  "flags": [
+    {
+      "category": "Chat-only interview",
+      "detected": false,
+      "evidence": "",
+      "explanation": ""
     }
+  ],
+  "summary": ""
+}
 
-    const body = await request.json();
+"extractedText" must contain the exact job offer text found in the input (transcribed from the image if one was provided, or the original message text if plain text was provided). Do not summarize or paraphrase it, transcribe it as written.
+`;
 
-    const {
-      messageText,
-      companyName,
-      senderDomain,
-      userId,
-    } = body;
-
-    if (!messageText || messageText.trim().length < 10) {
-      return Response.json(
-        {
-          error: "Please provide the job offer message text.",
-        },
-        { status: 400 }
-      );
-    }
-
-    const embedding = await getEmbedding(messageText);
-    const embeddingString = embedding ? `[${embedding.join(",")}]` : null;
-
-    if (embeddingString) {
-      const { data: matches, error: matchError } = await supabase.rpc(
-        "match_similar_check",
-        {
-          query_embedding: embeddingString,
-          match_threshold: SIMILARITY_THRESHOLD,
-        }
-      );
-
-      if (matchError) {
-        console.error("Similarity match error:", matchError);
-      }
-
-      if (
-        matches &&
-        matches.length > 0 &&
-        matches[0].similarity_score >= SIMILARITY_THRESHOLD
-      ) {
-        const match = matches[0];
-
-        let summary = match.summary;
-        let matchedPrevious = true;
-
-        if (
-          (match.company_name && match.company_name !== companyName) ||
-          (match.sender_domain && match.sender_domain !== senderDomain)
-        ) {
-          summary += ` This message closely matches a job offer reported earlier${
-            match.company_name ? ` under the company name "${match.company_name}"` : ""
-          }${
-            match.sender_domain ? ` and sender domain "${match.sender_domain}"` : ""
-          }. Scammers often reuse the same message template with small changes.`;
-        }
-
-        const analysis = {
-          riskScore: match.risk_score,
-          riskLevel: match.risk_level,
-          flags: match.flags,
-          summary,
-          matchedPrevious,
-        };
-
-        const { error: dbError } = await supabase.from("checks").insert({
-          message_text: messageText,
-          company_name: companyName || null,
-          sender_domain: senderDomain || null,
-          risk_score: analysis.riskScore,
-          risk_level: analysis.riskLevel,
-          summary: analysis.summary,
-          flags: analysis.flags,
-          user_id: userId || null,
-          embedding: embeddingString,
-        });
-
-        if (dbError) {
-          console.error("Supabase insert error:", dbError);
-        }
-
-        return Response.json(analysis);
-      }
-    }
-
-    const prompt = `
+function buildAnalysisInstructions(companyName, senderDomain) {
+  return `
 You are a job scam detection analyst focused on Nigeria and remote job offers.
 
-Analyze the following job offer for potential scam indicators.
-
-JOB OFFER MESSAGE:
-"""
-${messageText}
-"""
+Analyze the job offer provided (as text, or as an image containing a job offer message) for potential scam indicators.
 
 COMPANY CLAIMED:
 ${companyName || "Not provided"}
@@ -299,34 +265,133 @@ The result is an educational risk assessment.
 
 Do not claim with certainty that a person or company is fraudulent.
 
-Return ONLY valid JSON using exactly this structure:
-
-{
-  "riskScore": 0,
-  "riskLevel": "low",
-  "flags": [
-    {
-      "category": "Chat-only interview",
-      "detected": false,
-      "evidence": "",
-      "explanation": ""
-    }
-  ],
-  "summary": ""
-}
+${RESPONSE_SCHEMA_INSTRUCTIONS}
 `;
+}
+
+export async function POST(request) {
+  try {
+    if (API_KEYS.length === 0) {
+      return Response.json(
+        {
+          error: "Service configuration error.",
+        },
+        { status: 500 }
+      );
+    }
+
+    const body = await request.json();
+
+    const {
+      messageText,
+      companyName,
+      senderDomain,
+      userId,
+      imageBase64,
+      imageMimeType,
+    } = body;
+
+    const hasImage = !!imageBase64;
+    const hasText = messageText && messageText.trim().length >= 10;
+
+    if (!hasImage && !hasText) {
+      return Response.json(
+        {
+          error: "Please provide a job offer message or an image.",
+        },
+        { status: 400 }
+      );
+    }
+
+    let embeddingString = null;
+
+    if (hasText && !hasImage) {
+      const embedding = await getEmbedding(messageText);
+      embeddingString = embedding ? `[${embedding.join(",")}]` : null;
+
+      if (embeddingString) {
+        const { data: matches, error: matchError } = await supabase.rpc(
+          "match_similar_check",
+          {
+            query_embedding: embeddingString,
+            match_threshold: SIMILARITY_THRESHOLD,
+          }
+        );
+
+        if (matchError) {
+          console.error("Similarity match error:", matchError);
+        }
+
+        if (
+          matches &&
+          matches.length > 0 &&
+          matches[0].similarity_score >= SIMILARITY_THRESHOLD
+        ) {
+          const match = matches[0];
+
+          let summary = match.summary;
+          let matchedPrevious = true;
+
+          if (
+            (match.company_name && match.company_name !== companyName) ||
+            (match.sender_domain && match.sender_domain !== senderDomain)
+          ) {
+            summary += ` This message closely matches a job offer reported earlier${
+              match.company_name ? ` under the company name "${match.company_name}"` : ""
+            }${
+              match.sender_domain ? ` and sender domain "${match.sender_domain}"` : ""
+            }. Scammers often reuse the same message template with small changes.`;
+          }
+
+          const analysis = {
+            riskScore: match.risk_score,
+            riskLevel: match.risk_level,
+            flags: match.flags,
+            summary,
+            matchedPrevious,
+          };
+
+          const { error: dbError } = await supabase.from("checks").insert({
+            message_text: messageText,
+            company_name: companyName || null,
+            sender_domain: senderDomain || null,
+            risk_score: analysis.riskScore,
+            risk_level: analysis.riskLevel,
+            summary: analysis.summary,
+            flags: analysis.flags,
+            user_id: userId || null,
+            embedding: embeddingString,
+          });
+
+          if (dbError) {
+            console.error("Supabase insert error:", dbError);
+          }
+
+          return Response.json(analysis);
+        }
+      }
+    }
+
+    const instructions = buildAnalysisInstructions(companyName, senderDomain);
+
+    const parts = [];
+
+    if (hasImage) {
+      parts.push({
+        inlineData: {
+          mimeType: imageMimeType || "image/jpeg",
+          data: imageBase64,
+        },
+      });
+      parts.push({ text: instructions });
+    } else {
+      parts.push({
+        text: `JOB OFFER MESSAGE:\n"""\n${messageText}\n"""\n\n${instructions}`,
+      });
+    }
 
     const requestBody = {
-      contents: [
-        {
-          parts: [
-            {
-              text: prompt,
-            },
-          ],
-        },
-      ],
-
+      contents: [{ parts }],
       generationConfig: {
         responseMimeType: "application/json",
       },
@@ -373,8 +438,15 @@ Return ONLY valid JSON using exactly this structure:
       );
     }
 
+    const finalMessageText = analysis.extractedText || messageText || "";
+
+    if (hasImage && finalMessageText) {
+      const embedding = await getEmbedding(finalMessageText);
+      embeddingString = embedding ? `[${embedding.join(",")}]` : null;
+    }
+
     const { error: dbError } = await supabase.from("checks").insert({
-      message_text: messageText,
+      message_text: finalMessageText,
       company_name: companyName || null,
       sender_domain: senderDomain || null,
       risk_score: analysis.riskScore,
@@ -389,7 +461,10 @@ Return ONLY valid JSON using exactly this structure:
       console.error("Supabase insert error:", dbError);
     }
 
-    return Response.json(analysis);
+    return Response.json({
+      ...analysis,
+      messageText: finalMessageText,
+    });
 
   } catch (error) {
     console.error("Analysis error:", error);
