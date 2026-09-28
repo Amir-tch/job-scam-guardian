@@ -6,6 +6,12 @@ import { supabase } from "./lib/supabase";
 import { exportReportToPDF } from "./lib/exportReport";
 import BottomNav from "./components/BottomNav";
 
+const STARTER_QUESTIONS = [
+  "Why is this risky?",
+  "What should I do next?",
+  "How can I verify this employer?",
+];
+
 export default function Home() {
   const router = useRouter();
   const [user, setUser] = useState(null);
@@ -23,6 +29,12 @@ export default function Home() {
   const [imageMimeType, setImageMimeType] = useState(null);
   const [dragActive, setDragActive] = useState(false);
 
+  const [chatMessages, setChatMessages] = useState([]);
+  const [chatInput, setChatInput] = useState("");
+  const [chatLoading, setChatLoading] = useState(false);
+  const [chatError, setChatError] = useState("");
+  const chatEndRef = useRef(null);
+
   const timeoutRef = useRef(null);
   const fileInputRef = useRef(null);
 
@@ -35,6 +47,10 @@ export default function Home() {
       }
     });
   }, [router]);
+
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [chatMessages, chatLoading]);
 
   function handleFile(file) {
     if (!file || !file.type.startsWith("image/")) {
@@ -84,6 +100,9 @@ export default function Home() {
   async function analyzeJob(forceFresh = false) {
     setError("");
     setAnalysis(null);
+    setChatMessages([]);
+    setChatInput("");
+    setChatError("");
 
     const hasText = messageText.trim().length >= 10;
     const hasImage = !!imageBase64;
@@ -130,6 +149,96 @@ export default function Home() {
     } finally {
       clearTimeout(timeoutRef.current);
       setLoading(false);
+    }
+  }
+
+  async function sendMessage(text) {
+    const question = (text ?? chatInput).trim();
+    if (!question || chatLoading || !analysis?.id) return;
+
+    setChatError("");
+    setChatLoading(true);
+    setChatInput("");
+
+    const { data: savedUser, error: saveError } = await supabase
+      .from("check_messages")
+      .insert({
+        check_id: analysis.id,
+        user_id: user?.id || null,
+        role: "user",
+        content: question,
+      })
+      .select()
+      .single();
+
+    if (saveError) {
+      setChatError("Could not send your message. Please try again.");
+      setChatLoading(false);
+      setChatInput(question);
+      return;
+    }
+
+    const historyBefore = chatMessages;
+    setChatMessages((prev) => [...prev, savedUser]);
+
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData?.session?.access_token;
+
+      const response = await fetch("/api/chat", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          question,
+          history: historyBefore.map((m) => ({
+            role: m.role,
+            content: m.content,
+          })),
+          context: {
+            companyName,
+            senderDomain,
+            messageText: analysis.messageText || messageText,
+            riskScore: analysis.riskScore,
+            riskLevel: analysis.riskLevel,
+            summary: analysis.summary,
+            flags: analysis.flags,
+            security: analysis.security,
+          },
+        }),
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.error || "Something went wrong.");
+      }
+
+      const { data: savedReply } = await supabase
+        .from("check_messages")
+        .insert({
+          check_id: analysis.id,
+          user_id: user?.id || null,
+          role: "assistant",
+          content: result.reply,
+        })
+        .select()
+        .single();
+
+      setChatMessages((prev) => [
+        ...prev,
+        savedReply || {
+          id: `temp-${Date.now()}`,
+          role: "assistant",
+          content: result.reply,
+        },
+      ]);
+    } catch (err) {
+      setChatError(err.message || "Something went wrong. Please try again.");
+    } finally {
+      setChatLoading(false);
     }
   }
 
@@ -413,6 +522,112 @@ export default function Home() {
                 </div>
               ))}
             </div>
+
+            {analysis.id && (
+              <div className="summary">
+                <h3 style={{ marginBottom: 12 }}>Ask a follow-up question</h3>
+
+                {chatMessages.length === 0 && !chatLoading && (
+                  <div
+                    style={{
+                      display: "flex",
+                      flexWrap: "wrap",
+                      gap: 8,
+                      marginBottom: 12,
+                    }}
+                  >
+                    {STARTER_QUESTIONS.map((q) => (
+                      <button
+                        key={q}
+                        type="button"
+                        onClick={() => sendMessage(q)}
+                        style={{
+                          width: "auto",
+                          padding: "6px 12px",
+                          fontSize: 13,
+                          background: "#f3f4f6",
+                          color: "#1a1a1a",
+                        }}
+                      >
+                        {q}
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                <div
+                  style={{
+                    maxHeight: 360,
+                    overflowY: "auto",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 10,
+                    marginBottom: 12,
+                  }}
+                >
+                  {chatMessages.map((m) => (
+                    <div
+                      key={m.id}
+                      style={{
+                        alignSelf: m.role === "user" ? "flex-end" : "flex-start",
+                        maxWidth: "85%",
+                        padding: "10px 14px",
+                        borderRadius: 12,
+                        fontSize: 14,
+                        lineHeight: 1.5,
+                        whiteSpace: "pre-wrap",
+                        background: m.role === "user" ? "#2d3648" : "#f3f4f6",
+                        color: m.role === "user" ? "#ffffff" : "#1a1a1a",
+                      }}
+                    >
+                      {m.content}
+                    </div>
+                  ))}
+
+                  {chatLoading && (
+                    <div
+                      style={{
+                        alignSelf: "flex-start",
+                        padding: "10px 14px",
+                        borderRadius: 12,
+                        fontSize: 14,
+                        background: "#f3f4f6",
+                        color: "#6b7280",
+                      }}
+                    >
+                      Thinking...
+                    </div>
+                  )}
+
+                  <div ref={chatEndRef} />
+                </div>
+
+                {chatError && <div className="error">{chatError}</div>}
+
+                <div style={{ display: "flex", gap: 8 }}>
+                  <input
+                    type="text"
+                    value={chatInput}
+                    onChange={(e) => setChatInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") sendMessage();
+                    }}
+                    placeholder="Ask about this job offer..."
+                    maxLength={4000}
+                    disabled={chatLoading}
+                    style={{ flex: 1, marginBottom: 0 }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => sendMessage()}
+                    disabled={chatLoading || chatInput.trim().length === 0}
+                    style={{ width: "auto", padding: "10px 18px" }}
+                  >
+                    Send
+                  </button>
+                </div>
+              </div>
+            )}
 
             <button
               className="export-btn"

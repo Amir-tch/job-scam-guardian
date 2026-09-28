@@ -64,7 +64,7 @@ export default function Stats() {
   useEffect(() => {
     async function load() {
       const { data, error } = await supabase
-        .from("checks")
+        .from("scam_signals")
         .select("risk_level, risk_score, flags");
 
       if (!error && data) {

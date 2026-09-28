@@ -8,6 +8,8 @@ import {
   applySecurity,
 } from "../../lib/securityChecks";
 
+export const maxDuration = 60;
+
 const API_KEYS = [
   process.env.GEMINI_API_KEY,
   process.env.GEMINI_API_KEY_2,
@@ -25,6 +27,7 @@ const MODELS = [
 
 const EMBEDDING_MODEL = "gemini-embedding-001";
 const SIMILARITY_THRESHOLD = 0.86;
+const REQUEST_TIME_BUDGET_MS = 45000;
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -89,11 +92,16 @@ function isModelUnavailableError(status, errorMessage) {
   );
 }
 
-async function callWithKeyRotation(url, requestBody, model) {
+async function callWithKeyRotation(url, requestBody, model, deadline) {
   let lastResponse;
   let lastData;
 
   for (let keyIndex = 0; keyIndex < API_KEYS.length; keyIndex++) {
+    if (Date.now() > deadline) {
+      console.log("Time budget exceeded, stopping key rotation.");
+      break;
+    }
+
     const key = API_KEYS[keyIndex];
 
     if (model && (await isExhausted(keyIndex, model))) {
@@ -101,7 +109,12 @@ async function callWithKeyRotation(url, requestBody, model) {
       continue;
     }
 
-    for (let attempt = 1; attempt <= 3; attempt++) {
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      if (Date.now() > deadline) {
+        console.log("Time budget exceeded, stopping retries.");
+        break;
+      }
+
       const response = await fetch(url, {
         method: "POST",
         headers: {
@@ -141,11 +154,14 @@ async function callWithKeyRotation(url, requestBody, model) {
         errorMessage.toLowerCase().includes("high demand") ||
         errorMessage.toLowerCase().includes("temporarily");
 
-      if (!isTemporaryError || attempt === 3) {
+      if (!isTemporaryError || attempt === 2) {
         break;
       }
 
-      await sleep(attempt * 4000);
+      const remaining = deadline - Date.now();
+      const wait = Math.min(3000, Math.max(0, remaining - 1000));
+      if (wait <= 0) break;
+      await sleep(wait);
     }
   }
 
@@ -153,14 +169,20 @@ async function callWithKeyRotation(url, requestBody, model) {
 }
 
 async function callGeminiWithModelFallback(requestBody) {
+  const deadline = Date.now() + REQUEST_TIME_BUDGET_MS;
   let lastResult;
 
   for (const model of MODELS) {
+    if (Date.now() > deadline) {
+      console.log("Time budget exceeded, stopping model fallback.");
+      break;
+    }
+
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
 
     console.log(`Trying model: ${model}`);
 
-    const result = await callWithKeyRotation(url, requestBody, model);
+    const result = await callWithKeyRotation(url, requestBody, model, deadline);
     lastResult = result;
 
     if (result.response?.ok) {
@@ -182,6 +204,7 @@ async function callGeminiWithModelFallback(requestBody) {
 
 async function getEmbedding(text) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${EMBEDDING_MODEL}:embedContent`;
+  const deadline = Date.now() + 10000;
 
   const { response, data } = await callWithKeyRotation(
     url,
@@ -190,7 +213,8 @@ async function getEmbedding(text) {
       taskType: "SEMANTIC_SIMILARITY",
       outputDimensionality: 768,
     },
-    EMBEDDING_MODEL
+    EMBEDDING_MODEL,
+    deadline
   );
 
   if (!response?.ok || !data?.embedding?.values) {
@@ -326,7 +350,7 @@ export async function POST(request) {
 
       if (embeddingString && !forceFresh) {
         const { data: matches, error: matchError } = await supabase.rpc(
-          "match_similar_check",
+          "match_similar_signal",
           {
             query_embedding: embeddingString,
             match_threshold: SIMILARITY_THRESHOLD,
@@ -369,7 +393,28 @@ export async function POST(request) {
           const cachedLinkInfo = await checkSafeBrowsing(extractUrls(messageText));
           const analysis = applySecurity(baseAnalysis, domainInfo, cachedLinkInfo);
 
-          const { error: dbError } = await supabase.from("checks").insert({
+          const { data: insertedCheck, error: dbError } = await supabase
+            .from("checks")
+            .insert({
+              message_text: messageText,
+              company_name: companyName || null,
+              sender_domain: senderDomain || null,
+              risk_score: analysis.riskScore,
+              risk_level: analysis.riskLevel,
+              summary: analysis.summary,
+              flags: analysis.flags,
+              user_id: userId || null,
+              embedding: embeddingString,
+              security: analysis.security,
+            })
+            .select("id")
+            .single();
+
+          if (dbError) {
+            console.error("Supabase insert error:", dbError);
+          }
+
+          const { error: signalError } = await supabase.from("scam_signals").insert({
             message_text: messageText,
             company_name: companyName || null,
             sender_domain: senderDomain || null,
@@ -377,16 +422,15 @@ export async function POST(request) {
             risk_level: analysis.riskLevel,
             summary: analysis.summary,
             flags: analysis.flags,
-            user_id: userId || null,
-            embedding: embeddingString,
             security: analysis.security,
+            embedding: embeddingString,
           });
 
-          if (dbError) {
-            console.error("Supabase insert error:", dbError);
+          if (signalError) {
+            console.error("Scam signal insert error:", signalError);
           }
 
-          return Response.json(analysis);
+          return Response.json({ ...analysis, id: insertedCheck?.id || null });
         }
       }
     }
@@ -425,10 +469,10 @@ export async function POST(request) {
     if (!response?.ok) {
       return Response.json(
         {
-          error: "Request failed. Please try again.",
+          error: "Our AI provider is experiencing issues right now. Please try again in a minute.",
         },
         {
-          status: response?.status || 500,
+          status: response?.status || 503,
         }
       );
     }
@@ -471,7 +515,28 @@ export async function POST(request) {
     const linkInfo = await checkSafeBrowsing(extractUrls(finalMessageText));
     analysis = applySecurity(analysis, domainInfo, linkInfo);
 
-    const { error: dbError } = await supabase.from("checks").insert({
+    const { data: insertedCheck, error: dbError } = await supabase
+      .from("checks")
+      .insert({
+        message_text: finalMessageText,
+        company_name: companyName || null,
+        sender_domain: senderDomain || null,
+        risk_score: analysis.riskScore,
+        risk_level: analysis.riskLevel,
+        summary: analysis.summary,
+        flags: analysis.flags,
+        user_id: userId || null,
+        embedding: embeddingString,
+        security: analysis.security,
+      })
+      .select("id")
+      .single();
+
+    if (dbError) {
+      console.error("Supabase insert error:", dbError);
+    }
+
+    const { error: signalError } = await supabase.from("scam_signals").insert({
       message_text: finalMessageText,
       company_name: companyName || null,
       sender_domain: senderDomain || null,
@@ -479,18 +544,18 @@ export async function POST(request) {
       risk_level: analysis.riskLevel,
       summary: analysis.summary,
       flags: analysis.flags,
-      user_id: userId || null,
-      embedding: embeddingString,
       security: analysis.security,
+      embedding: embeddingString,
     });
 
-    if (dbError) {
-      console.error("Supabase insert error:", dbError);
+    if (signalError) {
+      console.error("Scam signal insert error:", signalError);
     }
 
     return Response.json({
       ...analysis,
       messageText: finalMessageText,
+      id: insertedCheck?.id || null,
     });
 
   } catch (error) {
