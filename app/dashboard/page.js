@@ -43,21 +43,33 @@ export default function Dashboard() {
     return "risk-low";
   }
 
+  function getDisplayLabel(check) {
+    if (check.company_name) return check.company_name;
+
+    const text = (check.message_text || "").trim();
+    if (!text) return "Unnamed offer";
+
+    const words = text.split(/\s+/).slice(0, 6).join(" ");
+    return text.split(/\s+/).length > 6 ? `${words}...` : words;
+  }
+
   if (loading) {
     return (
       <>
+        <BottomNav />
         <main className="container">
           <div className="skeleton skeleton-line" style={{ width: "50%" }} />
           <div className="skeleton skeleton-block" />
           <div className="skeleton skeleton-block" />
         </main>
-        <BottomNav />
       </>
     );
   }
 
   return (
     <>
+      <BottomNav />
+
       <main className="container">
         <h1 style={{ marginBottom: 20 }}>Your check history</h1>
 
@@ -85,7 +97,7 @@ export default function Dashboard() {
                 }}
               >
                 <div>
-                  <strong>{check.company_name || "Unnamed company"}</strong>
+                  <strong>{getDisplayLabel(check)}</strong>
                   <p style={{ margin: "4px 0", color: "#6b7280", fontSize: 13 }}>
                     {new Date(check.created_at).toLocaleString()}
                   </p>
@@ -123,6 +135,11 @@ export default function Dashboard() {
             <div className="score">
               <span>Risk score</span>
               <strong>{selected.risk_score}/100</strong>
+            </div>
+
+            <div className="summary">
+              <h3>Original message</h3>
+              <p>{selected.message_text}</p>
             </div>
 
             <div className="summary">
@@ -175,8 +192,6 @@ export default function Dashboard() {
           </section>
         )}
       </main>
-
-      <BottomNav />
     </>
   );
 }

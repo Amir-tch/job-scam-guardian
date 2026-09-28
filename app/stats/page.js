@@ -52,17 +52,19 @@ export default function Stats() {
   if (loading) {
     return (
       <>
+        <BottomNav />
         <main className="container">
           <div className="skeleton skeleton-line" style={{ width: "50%" }} />
           <div className="skeleton skeleton-block" />
         </main>
-        <BottomNav />
       </>
     );
   }
 
   return (
     <>
+      <BottomNav />
+
       <main className="container">
         <section className="hero">
           <div className="badge">PUBLIC STATS</div>
@@ -86,21 +88,27 @@ export default function Stats() {
             <p style={{ color: "#6b7280", marginBottom: 6, fontSize: 13 }}>
               Total checks run
             </p>
-            <strong style={{ fontSize: 30 }}>{totalChecks}</strong>
+            <strong style={{ fontSize: 30, color: "#2d3648" }}>
+              {totalChecks}
+            </strong>
           </div>
 
           <div>
             <p style={{ color: "#6b7280", marginBottom: 6, fontSize: 13 }}>
               Flagged high risk
             </p>
-            <strong style={{ fontSize: 30 }}>{highRiskPercent}%</strong>
+            <strong style={{ fontSize: 30, color: "#b42318" }}>
+              {highRiskPercent}%
+            </strong>
           </div>
 
           <div>
             <p style={{ color: "#6b7280", marginBottom: 6, fontSize: 13 }}>
               Most common red flag
             </p>
-            <strong style={{ fontSize: 16 }}>{topFlag}</strong>
+            <strong style={{ fontSize: 16, color: "#2d3648" }}>
+              {topFlag}
+            </strong>
           </div>
         </section>
 
@@ -111,8 +119,6 @@ export default function Stats() {
           </p>
         </footer>
       </main>
-
-      <BottomNav />
     </>
   );
 }

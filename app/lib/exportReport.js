@@ -33,20 +33,22 @@ export function exportReportToPDF(analysis, meta = {}) {
   addLine(analysis.summary || "No summary provided.");
 
   y += 4;
-  addLine("Warning Signs", 13, true);
 
-  analysis.flags?.forEach((flag) => {
-    addLine(
-      `${flag.category}: ${flag.detected ? "DETECTED" : "Not detected"}`,
-      11,
-      true
-    );
-    if (flag.detected && flag.evidence) {
-      addLine(`Evidence: "${flag.evidence}"`, 10);
-    }
-    addLine(flag.explanation || "", 10);
-    y += 2;
-  });
+  const detectedFlags = analysis.flags?.filter((f) => f.detected) || [];
+
+  if (detectedFlags.length > 0) {
+    addLine("Warning Signs Detected", 13, true);
+
+    detectedFlags.forEach((flag) => {
+      addLine(flag.category, 11, true);
+      if (flag.evidence) {
+        addLine(`Evidence: "${flag.evidence}"`, 10);
+      }
+      y += 2;
+    });
+  } else {
+    addLine("No warning signs detected.", 11);
+  }
 
   y += 6;
   addLine(

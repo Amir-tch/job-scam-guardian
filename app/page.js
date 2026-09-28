@@ -83,9 +83,9 @@ export default function Home() {
 
   return (
     <>
-      <main className="container">
-        {user && <div className="top-bar">{user.email}</div>}
+      <BottomNav />
 
+      <main className="container">
         <section className="hero">
           <div className="badge">JOB SCAM GUARDIAN</div>
           <h1>Is this job offer a scam?</h1>
@@ -213,8 +213,6 @@ export default function Home() {
           </p>
         </footer>
       </main>
-
-      <BottomNav />
     </>
   );
 }
