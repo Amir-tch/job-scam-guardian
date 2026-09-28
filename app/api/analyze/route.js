@@ -7,6 +7,7 @@ import {
   describeDomainAge,
   applySecurity,
 } from "../../lib/securityChecks";
+import { runSignalLibrary } from "../../lib/signalLibrary";
 
 export const maxDuration = 60;
 
@@ -466,54 +467,63 @@ export async function POST(request) {
 
     const { response, data } = await callGeminiWithModelFallback(requestBody);
 
-    if (!response?.ok) {
-      return Response.json(
-        {
-          error: "Our AI provider is experiencing issues right now. Please try again in a minute.",
-        },
-        {
-          status: response?.status || 503,
-        }
-      );
-    }
-
-    const generatedText =
-      data?.candidates?.[0]?.content?.parts?.[0]?.text;
-
-    if (!generatedText) {
-      return Response.json(
-        {
-          error: "No response received. Please try again.",
-        },
-        { status: 500 }
-      );
-    }
-
     let analysis;
+    let finalMessageText;
 
-    try {
-      analysis = JSON.parse(generatedText);
-    } catch (parseError) {
-      console.error("JSON parsing error:", parseError);
-      console.error("Raw response:", generatedText);
+    if (!response?.ok) {
+      if (hasImage) {
+        return Response.json(
+          {
+            error:
+              "Our AI provider is experiencing issues right now, so an image cannot be analyzed at the moment. Please try again in a few minutes, or paste the message as text instead.",
+          },
+          { status: response?.status || 503 }
+        );
+      }
 
-      return Response.json(
-        {
-          error: "Unexpected response format. Please try again.",
-        },
-        { status: 500 }
-      );
+      console.log("Gemini fully unavailable, falling back to signal library.");
+
+      finalMessageText = messageText;
+      const fallback = runSignalLibrary(messageText, companyName, senderDomain);
+      const linkInfo = await checkSafeBrowsing(extractUrls(finalMessageText));
+      analysis = applySecurity(fallback, domainInfo, linkInfo);
+      analysis.security = { ...analysis.security, aiUnavailable: true };
+    } else {
+      const generatedText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+
+      if (!generatedText) {
+        return Response.json(
+          {
+            error: "No response received. Please try again.",
+          },
+          { status: 500 }
+        );
+      }
+
+      try {
+        analysis = JSON.parse(generatedText);
+      } catch (parseError) {
+        console.error("JSON parsing error:", parseError);
+        console.error("Raw response:", generatedText);
+
+        return Response.json(
+          {
+            error: "Unexpected response format. Please try again.",
+          },
+          { status: 500 }
+        );
+      }
+
+      finalMessageText = analysis.extractedText || messageText || "";
+
+      if (hasImage && finalMessageText) {
+        const embedding = await getEmbedding(finalMessageText);
+        embeddingString = embedding ? `[${embedding.join(",")}]` : null;
+      }
+
+      const linkInfo = await checkSafeBrowsing(extractUrls(finalMessageText));
+      analysis = applySecurity(analysis, domainInfo, linkInfo);
     }
-
-    const finalMessageText = analysis.extractedText || messageText || "";
-
-    if (hasImage && finalMessageText) {
-      const embedding = await getEmbedding(finalMessageText);
-      embeddingString = embedding ? `[${embedding.join(",")}]` : null;
-    }
-
-    const linkInfo = await checkSafeBrowsing(extractUrls(finalMessageText));
-    analysis = applySecurity(analysis, domainInfo, linkInfo);
 
     const { data: insertedCheck, error: dbError } = await supabase
       .from("checks")

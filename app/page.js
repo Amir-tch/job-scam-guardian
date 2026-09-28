@@ -443,6 +443,28 @@ export default function Home() {
               </div>
             )}
 
+            {analysis.security?.aiUnavailable && (
+              <div className="match-banner">
+                <div style={{ marginBottom: 10 }}>
+                  Our AI analyst could not be reached, so this result is from a
+                  basic pattern check instead of a full analysis. It is less
+                  thorough. Try again in a few minutes for a complete result.
+                </div>
+                <button
+                  type="button"
+                  onClick={() => analyzeJob(true)}
+                  style={{
+                    width: "auto",
+                    padding: "8px 14px",
+                    fontSize: 13,
+                    background: "#92400e",
+                  }}
+                >
+                  Try full AI analysis again
+                </button>
+              </div>
+            )}
+
             <div className="result-header">
               <h2>Analysis results</h2>
               <div className={`risk ${getRiskClass(analysis.riskLevel)}`}>

@@ -373,6 +373,14 @@ export default function Dashboard() {
               Back to history
             </button>
 
+            {selected.security?.aiUnavailable && (
+              <div className="match-banner">
+                Our AI analyst could not be reached when this check was run,
+                so this result is from a basic pattern check instead of a
+                full analysis.
+              </div>
+            )}
+
             <div className="result-header">
               <h2>Analysis results</h2>
               <div className={`risk ${getRiskClass(selected.risk_level)}`}>
